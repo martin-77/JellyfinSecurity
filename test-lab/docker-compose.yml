@@ -1,0 +1,75 @@
+# JellyfinSecurity test lab — a self-contained stack for reproducing/verifying
+# plugin features without depending on a real (remote) Jellyfin server.
+#
+#   jellyfin   : Jellyfin + the locally-built plugin (staged by stage-plugin.ps1)
+#   keycloak   : a real OIDC identity provider with groups/roles (for OIDC tests)
+#   nginx      : a deliberately "nasty" reverse proxy (sub_filter + strict CSP)
+#                that reproduces the #95 / proxy-class corruption bugs
+#
+# Access after `docker compose up -d`:
+#   - Jellyfin DIRECT          : http://localhost:8096
+#   - Jellyfin THROUGH proxy   : http://localhost:8097   (use this to repro proxy bugs)
+#   - Keycloak admin console    : http://keycloak.test:8080  (admin / admin)
+#
+# Tiers — bring up only what you need:
+#   docker compose up -d jellyfin              # Tier 1: 2FA / passkeys / app-passwords / set-password
+#   docker compose up -d jellyfin keycloak     # Tier 2: + OIDC (group->library, group->admin, force-password, link, #103/#104)
+#   docker compose up -d                       # Tier 3: + nasty proxy (#95, #102 proxy class)
+#
+# IMPORTANT one-time host setup (see README.md):
+#   Add to your hosts file:   127.0.0.1   keycloak.test
+#   (keeps the OIDC issuer identical for the browser AND the jellyfin container.)
+
+name: jellyfin-security-testlab
+
+services:
+  jellyfin:
+    image: jellyfin/jellyfin:10.11.11
+    container_name: jstl-jellyfin
+    networks: [labnet]
+    ports:
+      - "8096:8096"          # direct, no proxy
+    volumes:
+      # TESTLAB_DATA points at a NON-C drive (see .env — defaults to G:\ on this PC).
+      # The plugin is staged into <TESTLAB_DATA>/jellyfin-config/plugins by stage-plugin.ps1.
+      - ${TESTLAB_DATA:-./data}/jellyfin-config:/config
+      - ${TESTLAB_DATA:-./data}/jellyfin-cache:/cache
+    # keycloak.test must resolve, from INSIDE this container, to the host gateway
+    # (where Keycloak's 8080 is published) so the OIDC issuer/discovery URL is the
+    # SAME string the browser uses. host-gateway is provided by Docker/Podman.
+    extra_hosts:
+      - "keycloak.test:host-gateway"
+    restart: unless-stopped
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: jstl-keycloak
+    command: ["start-dev", "--import-realm", "--http-port=8080"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # Issuer = http://keycloak.test:8080 for everyone (browser + jellyfin container).
+      KC_HOSTNAME: http://keycloak.test:8080
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+    networks: [labnet]
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: jstl-nginx
+    networks: [labnet]
+    ports:
+      - "8097:80"            # Jellyfin via the nasty proxy
+    volumes:
+      - ./nginx/jellyfin-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on: [jellyfin]
+    restart: unless-stopped
+
+networks:
+  labnet:
+    driver: bridge
