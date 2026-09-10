@@ -1,7 +1,21 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <!-- Multi-ABI (single source): JellyfinVersion selects the
+         Jellyfin.Controller/Model package AND the .NET TFM. Default 10.11.9
+         (net9); a CI matrix row passes -p:JellyfinVersion=12.0.0 for the
+         Jellyfin 12 build (net10, which is what JF12 targets). The handful of
+         call sites where 12 changed an interface are guarded with #if
+         JELLYFIN12. Both builds ship as separate entries in one manifest.json
+         keyed by targetAbi; the catalog routes each host to its build. -->
+    <JellyfinVersion Condition="'$(JellyfinVersion)' == ''">10.11.9</JellyfinVersion>
+    <TargetFramework Condition="$(JellyfinVersion.StartsWith('12'))">net10.0</TargetFramework>
+    <TargetFramework Condition="'$(TargetFramework)' == ''">net9.0</TargetFramework>
+    <DefineConstants Condition="$(JellyfinVersion.StartsWith('12'))">$(DefineConstants);JELLYFIN12</DefineConstants>
+    <!-- Per-ABI lock file: the 10.11 and 12 dependency graphs differ (net9 vs
+         net10, different Jellyfin.Controller), so each ABI keeps its own
+         committed lock so CI's locked-mode restore stays reproducible for both. -->
+    <NuGetLockFilePath Condition="$(JellyfinVersion.StartsWith('12'))">packages.jf12.lock.json</NuGetLockFilePath>
     <RootNamespace>Jellyfin.Plugin.TwoFactorAuth</RootNamespace>
     <AssemblyName>Jellyfin.Plugin.TwoFactorAuth</AssemblyName>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
@@ -79,8 +93,8 @@
          host < 10.11.11 ("incompatible version of one of the shared libraries")
          — do not let it raise this without deliberately narrowing the
          supported-Jellyfin range. -->
-    <PackageReference Include="Jellyfin.Controller" Version="10.11.9" />
-    <PackageReference Include="Jellyfin.Model" Version="10.11.9" />
+    <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinVersion)" />
+    <PackageReference Include="Jellyfin.Model" Version="$(JellyfinVersion)" />
   </ItemGroup>
 
   <ItemGroup>
