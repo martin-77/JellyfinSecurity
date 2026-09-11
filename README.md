@@ -78,64 +78,6 @@ visible trust signals is treated as a high-priority bug.
 - **📲 In-app OIDC and the setup page on 12** *(#191, #193; camarigor)* — in-app "Sign in with …" no longer freezes on a blank screen on 12 (the stored credential now carries a resolvable address in the connection mode 12 expects), and 12's changed web routes get a working way back to the setup page from the avatar menu.
 - **500 passing tests.** Sigstore-signed and SLSA build-provenance attested.
 
-**v2.5.22**
-
-- **🔐 "Disable password sign-in" now actually disables password sign-in** *(reported privately by @camarigor)* — **affects servers with that switch enabled; present since v2.5.11.** Two independent ways password sign-in still succeeded with the switch on and every escape hatch off:
-  - **Only one of Jellyfin's two password endpoints was gated.** The deprecated `POST /Users/{userId}/Authenticate` was never matched. It carries no authorization requirement, is hidden from the API docs, and reaches the same authentication code — and the user id it needs isn't secret, since `GET /Users/Public` hands out ids and names to anyone. **That endpoint also skipped empty-password blocking and per-account lockout, including the failed-attempt counter**, which made it an unthrottled, unaudited password-guessing path.
-  - **The SSO waiver was a string test, not a lookup.** Any password merely *starting with* the internal `oidcbr_` prefix skipped the gate, so a user could opt themselves out of the server-wide policy by choosing one — with nothing in the UI or logs to show it.
-
-  This is a security-control *bypass*, not an authentication bypass: valid credentials were always still required. What failed was the mitigation the switch exists to provide. Both are fixed — the gate matches both endpoints, and the SSO waiver is now a real lookup against the live token store. Quick Connect and the admin/LAN/CIDR escape hatches behave exactly as before.
-- **Sign out of your identity provider, not just Jellyfin** *(#170, raised by @Akruidenberg in #134; implemented by @camarigor)* — signing out used to end only the Jellyfin session, so "Sign in with …" walked straight back in with no prompt. Enable **RP-initiated logout** per provider (off by default) and the browser is handed to the provider's own sign-out endpoint afterwards. Needs the provider to publish an `end_session_endpoint` — Keycloak and Authentik do, **Google does not**, in which case the toggle has no effect and sign-out behaves as before.
-- **Turning off password sign-in improves your security score** *(#160, @hax4dazy)* — the credit is **additive**, appearing only when the switch is on, so servers running passwords with 2FA are never docked for it. It's also graded: leaving the admin, LAN, or exempt-network hatches open scores partial credit, because password compromise is still in the threat model for those clients.
-- **No more "Internal server error" at your session limit** *(#178, @camarigor)* — a user with the correct password and a correct 2FA code who had hit **Maximum number of simultaneous sessions** saw a generic internal error pointing at the `[2FA]` logs, where the 2FA step had already succeeded. The real reason now surfaces, and the refusal no longer feeds the per-IP ban counter, so hitting your own session cap can't ban your own address.
-- **Jellyfin 12 readiness** *(#174, @martin-77; completed in #180)* — the plugin's own pages and three server endpoints now accept `Authorization: MediaBrowser Token="…"` as well as the legacy `X-Emby-Token`, which is required once legacy authorization is disabled on Jellyfin 12. The legacy header still wins when present, so nothing changes for clients that send it. Since 12.0 GA the same build loads and runs on Jellyfin 12.0.0 as is; no separate build is needed. See [Jellyfin 12](#jellyfin-12) under Installation.
-- **Hardening and housekeeping** — the trust-cookie middleware had the same endpoint blind spot (it failed *closed*, so was never exploitable) and is fixed alongside; **private vulnerability reporting is now enabled**, so the channel documented in [SECURITY.md](SECURITY.md) works; CodeQL action pins now move in lockstep so they can't deadlock. **476 passing tests.**
-
-**v2.5.21**
-
-This release fixes the "signed in successfully, then thrown back to the login page" class of bug at its root, makes the plugin work under a Jellyfin Base URL, and turns notifications into something you can actually authenticate and test.
-
-- **No more bounce back to the login page after a successful 2FA or SSO sign-in** *(#137 jaymu1406, #98 Re4mstr)* — two independent causes, both fixed. The client-side "2FA pending" flag that suppresses API calls mid-challenge was only ever cleared by the OIDC bridge, so completing a password+2FA login left it armed and Jellyfin Web's entire bootstrap was blocked on the next page load. And the stored credential recorded connection mode **Remote** while only ever populating a manual address, so Jellyfin resolved the server address to `undefined`. This is why it reproduced externally but never on the LAN, where a bypass meant the flag was never set in the first place.
-- **The Setup page works behind a Base URL** *(#144, someRandomDude-a)* — every API call from `/TwoFactorAuth/Setup` was hard-coded to the origin root, so any server mounted under a path (`https://host/jellyfin/`) 404'd on `/Users/Me` and the page reported "We couldn't verify your Jellyfin session". Nothing was ever wrong with the session; the page was asking the wrong origin. The 2FA challenge page had the same bug in its credential-storage path.
-- **User details actually load** *(#156, MilesTEG1)* — the Users table's **▸ details** panel was reading the step-up-gated full export, so on any server with step-up enabled it always returned 403 and printed "Failed to load details". It now reads a dedicated summary endpoint that carries only what the panel shows — device labels and dates, no audit log, IPs, device ids or email. The **Export** button, which genuinely should be gated, now prompts for the step-up code instead of failing silently.
-- **Authentik SSO stops breaking when its certificate expires** *(#142 jmbenevise, #98 HumnResources)* — Authentik's self-signed signing certificate expires after a year and doesn't rotate, and the plugin was rejecting otherwise-valid tokens because of it. The signature is still fully verified against the IdP's published keys; only the certificate's expiry date is no longer treated as fatal. And when verification *does* fail, the message now names the cause — expired certificate, signing-key mismatch, Client ID mismatch, clock drift, or an unsupported algorithm — instead of one opaque "Sign-in token could not be verified".
-- **Notification overhaul** *(#143, keinezeit8)* — **ntfy authentication** via access token or username/password, so you no longer have to make your topic world-writable to receive alerts. **Custom webhook headers** for receivers that authenticate with `Authorization:` or `X-Api-Key:` rather than the HMAC secret. **Send test notification** now tests *every* configured channel and reports each one's result, instead of refusing to run without a webhook URL. And the security score credits any notification channel, so an ntfy-only setup is no longer docked 5 points for not having a webhook.
-- **Synchronous XHR from other plugins is no longer attributed to this one** *(#149, MilesTEG1)* — the plugin issues no synchronous `XMLHttpRequest` anywhere, but it patched `XMLHttpRequest.prototype.send` globally, which put `inject.js` in the stack of other plugins' `sync-xhr` policy violations. Synchronous requests now pass through untouched. The README also documents an obsolete-feature-free `Permissions-Policy` header.
-- **Translations and regression coverage** — 855 keys aligned across all 8 languages; the suite is now 387 passing tests.
-
-**v2.5.20**
-
-This release focuses on reliable authentication across Android, reverse proxies, OIDC onboarding, and Jellyfin 10.11.11, with clearer identity context and a more dependable dashboard.
-
-- **Android and mobile login reliability** *(#64, #137, #138)* - fixes missing injected login controls, stale cached web shells, proxy/Base URL redirects, and the post-2FA return path used by native mobile clients.
-- **The challenge identifies the account** *(#134 follow-up)* - the verify screen now shows **Signing in as _username_**, including the flow where Jellyfin has already accepted the username and password.
-- **Trusted-device continuity** - trusted Android sessions and app-password/native-client sessions are recognised consistently across the follow-up requests that complete login.
-- **Safer, clearer OIDC onboarding** *(#133, #134, #135, #136)* - exact username linking is opt-in and conflict-safe, the password page requires a live authenticated onboarding proof, the user can cancel securely, and symbol requirements are supported and displayed.
-- **OIDC compatibility and diagnostics** *(#98, #120)* - discovery accepts an issuer root, redirect URIs respect reverse-proxy/Base URL information, and failed bridge authentication surfaces an actionable error instead of looping.
-- **Dashboard and packaging fixes** *(#123, #130, #131)* - security posture/navigation load reliably, the audit log can be sorted, the desktop/mobile sidebar follows the active language, and packaged installs include valid Jellyfin metadata and artwork.
-- **Notification deduplication** *(#124)* - repeated events are grouped even when a reverse proxy changes the forwarded client address.
-- **Portable passkey registration** *(#102)* - new credentials request ES256, avoiding Ed25519/native-libsodium failures across Linux, ARM, Windows, iOS, and password-manager authenticators.
-- **Translations and regression coverage** - all 847 keys are aligned across all 8 languages and the suite now contains 344 passing tests.
-
-**v2.5.19**
-
-- **"Omit `prompt=login`" per-provider toggle** *(bug #119, vasmarfas)* - some IdPs, notably **Authentik** (upstream bug [#18507](https://github.com/goauthentik/authentik/issues/18507)), return a 404 when the plugin forces re-authentication via `prompt=login`. A new opt-in toggle (Sign-in Methods → your provider) omits it for that provider only, so those setups can sign in. **Off by default** - the forced fresh-auth is a security measure. Localized in all 8 languages.
-- **Clearer OIDC Discovery URL errors** *(feature #120, MysaaJava)* - pasting the realm / issuer root instead of the `.well-known/openid-configuration` document now gives a clear, actionable error and auto-retries with the correct suffix appended, instead of a cryptic `KeyNotFoundException` in the logs.
-
-**v2.5.18**
-
-- **Recovery codes on the "verify your identity" screen** — when an already-signed-in session is asked to confirm 2FA, a **Recovery** tab now appears (next to Authenticator / Email) whenever the account has unused recovery codes, so a lost authenticator no longer strands you mid-session. Previously that tab only showed during an emergency lockout, even though the full login portal always offered it.
-- **Accurate security-posture score** — the "2FA coverage" factor no longer counts leftover 2FA records from deleted accounts, so the score reflects your *current* users instead of being artificially capped (e.g. "enroll 8 users" when everyone was already enrolled).
-- **SSO redirect-URI hint renders correctly** in all eight languages (was showing raw `<code>` markup on the Sign-in Methods tab).
-
-**v2.5.17**
-
-- **Self-hosted ntfy / Gotify / webhooks now deliver** *(bug #116, Arson31)* — a new **"Allow notifications to private/LAN addresses"** toggle (off by default) lets notifications reach a self-hosted target that resolves to a private LAN IP, which the SSRF guard otherwise refuses; link-local / cloud-metadata addresses stay blocked either way. ntfy also now publishes to `{server}/{topic}` correctly.
-- **App passwords on native clients — the follow-up fix** *(bug #107, DarkJackal87)* — after the login succeeded, some clients (Symfonium) still got a 403 on the very next request when their device id differed from the login request; the app-password session is now recognised as 2FA-satisfied regardless.
-- **OIDC verified-email account linking** *(bug #95, chrisbehectik)* — a boolean `email_verified: true` is now read correctly, so a first-time OIDC sign-in matches an existing Jellyfin user by their verified email instead of failing to match or creating a duplicate.
-- **Keycloak realm/client roles** *(feature #95, BoBeR182)* — nested `realm_access` / `resource_access` roles now drive "Allowed groups", "Admin groups", and role→library mapping (request the built-in `roles` scope on the provider and enable "Add to ID token" on the realm-roles mapper).
-
-
 > Full version history is in the [Changelog](#-changelog) below and on [GitHub Releases](https://github.com/ZL154/JellyfinSecurity/releases).
 
 ---
@@ -191,169 +133,75 @@ The standard Jellyfin login page gets a small "Sign in with 2FA" button injected
 
 ## 🧩 Features
 
-### New in v2.6.0
-- **Dual-ABI packaging: one source, two builds** - a .NET 9 build (`targetAbi 10.11.0.0`) for Jellyfin 10.11.x and a .NET 10 build (`targetAbi 12.0.0.0`) for Jellyfin 12.x, both published in the one `manifest.json` under the same GUID. Jellyfin's catalog installs the build matching the host's version, so 10.11 and 12 users share one catalog entry and one auto-update line (#196, #172).
-- **Admin step-up prompt on every gated action** - the OIDC provider create/edit/delete form and the shared admin helpers (user-2FA toggle, require-password-setup, audit log) route through the step-up-aware fetch, so a required re-auth shows the prompt instead of a bare "Save failed" (#198, #199).
-- **Step-up modal takes an emailed code or a passkey** - not just a typed TOTP, so an admin whose second factor is email OTP or a passkey can clear the gate (#194, #195).
-- **GeoIP diagnostics report the reason** - a database that fails to load is retried, falls back to an in-memory open, and reports per-database why it failed (not found / directory not visible / rejected path) instead of a blank "Fail" (#200, refs #51).
-- **In-app OIDC and setup-page fixes for Jellyfin 12** - the in-app sign-in stores a resolvable server address in the connection mode 12 expects, and 12's changed routes get a working path back to the setup page (#191, #193).
-- **500 passing tests**, both ABIs built and validated on live 10.11 and 12 servers.
+Organized by capability. Per-version history lives in the [Changelog](#-changelog) and on [GitHub Releases](https://github.com/ZL154/JellyfinSecurity/releases).
 
-### New in v2.5.22
-
-- **Password sign-in refusal covers both of Jellyfin's password endpoints** — the deprecated `POST /Users/{userId}/Authenticate` is now gated exactly like `AuthenticateByName`, which also brings empty-password blocking and per-account lockout (including the failed-attempt counter) to that path.
-- **OIDC bridge tokens are validated by lookup, not by prefix** — a password that merely starts with the internal token prefix no longer waives the password-sign-in policy.
-- **OIDC RP-initiated logout** — opt-in per provider; ends the IdP session on sign-out so "Sign in with …" prompts again (#170).
-- **Security score credits disabled password sign-in** — additive and graded by how many escape hatches remain open (#160).
-- **Accurate refusal when a user is at their session limit** — a real reason instead of a 500, and no per-IP ban counted (#178).
-- **Jellyfin 12 authorization headers** — `Authorization: MediaBrowser Token` accepted alongside the legacy `X-Emby-Token` on the plugin's pages and endpoints (#174, #180).
-
-### New in v2.5.21
-- **Post-sign-in bounce fixed at the root** — the client-side 2FA-pending flag is cleared on every sign-in completion path (not just the OIDC bridge), and stored credentials now record connection mode **Manual** to match the manual address the plugin writes, so Jellyfin Web can resolve the server after a 2FA or SSO login (#137, #98).
-- **Base URL support on the standalone pages** — the Setup page and the challenge page's credential handoff build API URLs from Jellyfin's configured base path instead of the origin root (#144).
-- **Non-sensitive user summary endpoint** — `GET /TwoFactorAuth/Users/{id}/Summary` backs the admin details panel with device labels and dates only, so expanding a row no longer requires (or fails on) step-up (#156).
-- **Actionable OIDC verification errors** — expired-certificate, signing-key, audience, issuer, lifetime and algorithm failures each produce a specific, internals-free message; an expired IdP signing certificate no longer blocks sign-in (#142).
-- **ntfy authentication** — access token (Bearer) or username/password (Basic), so notifications work against a topic with a write ACL (#143).
-- **Custom webhook headers** — arbitrary `Name: Value` headers per POST, validated against header injection and unable to override the dispatcher's own `Content-Type` / `X-2FA-*` headers (#143).
-- **Test every notification channel** — the admin test button dispatches to ntfy, Gotify and the webhook and reports each result separately (#143).
-- **Notification-aware security score** — the score factor credits ntfy or Gotify, not just a webhook (#143).
-- **Transparent XHR interception** — synchronous requests pass straight through, so a `sync-xhr=()` Permissions-Policy violation in another plugin is attributed to its real caller (#149).
-- **Fully localized** — all 855 keys match across English, German, Spanish, French, Italian, Japanese, Portuguese, and Chinese.
-- **Expanded regression suite** — 387 tests, including coverage for webhook header parsing and OIDC failure classification.
-
-### New in v2.5.20
-- **Android/mobile authentication repair** - login controls are reinjected into current and previously cached web shells, Base URL/proxy-aware redirects are preserved, and native clients complete the 2FA hand-off without looping (#64, #137, #138).
-- **Visible account identity during 2FA** - the challenge page shows the username being verified, so users can confirm which Jellyfin account they are signing into (#134 follow-up).
-- **OIDC onboarding hardening** - exact username linking is an explicit opt-in; verified-email and subject conflicts are refused; set-password identifies the account and requires a short-lived, single-use session proof; cancel revokes the server session; and configurable symbol requirements are enforced (#133-#136).
-- **Reliable dashboard extension entry** - the plugin appears under the Jellyfin dashboard on desktop and mobile, updates its translated label when the language changes, and includes its artwork in manual and catalog packages (#131).
-- **Sortable audit log** - choose newest or oldest first and keep the selection while navigating the admin page (#130).
-- **Notification deduplication for native sessions** - repeated session events and changing forwarded addresses no longer generate Gotify/ntfy notification storms (#124).
-- **Portable passkeys** - registration explicitly requests ES256 so credentials do not depend on a platform-specific Ed25519/libsodium sidecar (#102).
-- **Package lifecycle validation** - builds now reject mismatched metadata, versions, missing assemblies, and missing artwork before a release can be produced (#123).
-- **Security posture/admin reliability** - posture computation and tab navigation no longer stall on Jellyfin 10.11.11.
-- **Fully localized** - all 847 keys match across English, German, Spanish, French, Italian, Japanese, Portuguese, and Chinese.
-- **Expanded regression suite** - 344 tests cover the repaired auth, onboarding, dashboard, packaging, and translation paths.
-
-### New in v2.5.19
-- **Per-provider "omit `prompt=login`" toggle** — off by default; opt in for IdPs that 404 on forced re-authentication (Authentik, upstream bug #18507). Suppresses `prompt=login` on the step-up and account-link flows for that provider only (#119, vasmarfas). Localized in all 8 languages.
-- **Clearer OIDC Discovery URL errors** — a wrong Discovery URL (issuer / realm root instead of the `.well-known/openid-configuration` document) now reports the missing field with guidance and auto-retries with the correct suffix, instead of a bare `KeyNotFoundException` (#120, MysaaJava).
-
-### New in v2.5.18
-- **Recovery codes on the verify-identity screen** — the mid-session 2FA challenge now offers a **Recovery** tab whenever the account has unused recovery codes, matching the full login portal (previously that tab only appeared during an emergency lockout).
-- **Deleted-user-safe security score** — the "2FA coverage" posture factor counts live Jellyfin users only, so removing an account no longer permanently drags the score down.
-- **HTML-capable UI translations** — an opt-in `data-i18n-html` path fixes the SSO redirect-URI hint (and any future rich strings) rendering raw markup as literal text.
-
-### New in v2.5.17
-- **Private / LAN notification targets** — opt-in "Allow notifications to private/LAN addresses" so a self-hosted ntfy / Gotify / webhook on a LAN IP can deliver; link-local / cloud-metadata stay blocked either way; ntfy publishes to `{server}/{topic}` (#116, Arson31).
-- **App-password sessions survive on native clients** — a follow-up request no longer 403s when the client's device id differs from the login request; the session is treated as 2FA-satisfied for itself only, with no carry-over to a later login (#107, DarkJackal87).
-- **OIDC verified-email account linking** — a boolean `email_verified: true` is parsed correctly, so a first-time OIDC sign-in links to an existing user by verified email instead of duplicating (#95, chrisbehectik).
-- **Keycloak nested roles** — `realm_access` / `resource_access` roles feed "Allowed groups", "Admin groups", and role→library mapping, read from the id_token and `/userinfo` (#95, BoBeR182).
-
-### New in v2.5.16
-- **App passwords work on native / third-party clients** — creating an app password routes the account through the plugin's auth provider so the credential check runs; fixes Symfonium / Seerr / Jellyseerr / mobile-app rejections (#102, #107, #108). *(Re-create existing app passwords after updating.)*
-- **Configurable, fail-safe OIDC onboarding password page** — shows the configured complexity policy (not a fixed "16"), errors clearly with an escape hatch if the policy can't load, and can't be skipped via Back (#100).
-- **Per-provider SSRF egress allowlist** — "Additional allowed CIDRs" permits specific link-local / non-RFC1918 IdP addresses (rootless Podman host-gateway) that the guard blocks; opt-in, `/0` rejected (#103, andrewdunndev).
-- **Admin "require password setup"** — SMTP-less local-password recovery: re-arm a user to set a new password on next OIDC sign-in (#104, andrewdunndev).
-- **Login-page options** — opt-in "links below Quick Connect" placement + hide "Forgot password" when there's no password field (#79, ZEROX7).
-
-### New in v2.5.13
-- **Admin OIDC linking from Setup** — authenticated "Link a new provider" flow (popup, links by `sub`) so admins can self-link, bypassing the resolver's admin anti-takeover guard (#95).
-- **IdP-group → admin elevation** — opt-in per-provider toggle (default off), grant-only, WARN-logged (#96).
-- **Template user for auto-create** — new OIDC users inherit a chosen user's permissions / library access instead of Jellyfin defaults (#93).
-- **Enable-SSO / show-built-in-button split** — run SSO for your own custom button while hiding the plugin's built-in one (#97).
-- **Diagnosable OIDC bounce** — a failed post-auth `AuthenticateByName` now shows the real error + auth-proxy hint instead of a silent loop back to login (#98).
-
-### New in v2.5.12
-- **Login/setup/admin/sidebar i18n** - every plugin surface follows Jellyfin's language (auto-detect + persist); CDN-cache-immune so updates aren't served stale (#79).
-- **Passwordless 2FA login** - the 2FA portal accepts users whose password is disabled, matching the standard login page (#82).
-- **Admins-Only scope fix** - non-admins are no longer blocked/hung under *Admins Only* enforcement; fail-safe admin check (#81).
-- **Hide Jellyfin's built-in "Forgot password?"** - optional sub-toggle under email recovery; clearer email-claim auto-fill diagnostics (#80).
-- **Android SSO copy-link fallback** - reliable path when an app WebView trips Google's `disallowed_useragent` (#64).
-
-### New in v2.5.11
-- **Disable password sign-in** — OIDC / Quick-Connect-only mode with independently-toggleable **admin / LAN / exempt-CIDR** escape hatches (#69).
-- **Custom OIDC login button** — per-provider button text + icon/logo (#69).
-- **Password recovery by email** — one-time, single-use, rate-limited reset link; SMTP-gated, no account enumeration (#71).
-- **IdP email auto-fill** — populate the Jellyfin email from the IdP claim on sign-in; per-provider configurable claim (#70).
-- **Clear OIDC sign-in errors** — failed SSO explains why instead of bouncing silently.
-
-### Added in v2.5.4 – v2.5.7
-- **OIDC step-up factor** — re-authenticate to a linked IdP in a popup to satisfy hardened-security step-up, with subject-match against the stored `SsoLink`.
-- **Hardened self-service** (`SelfServiceStepUpMode` — `Off` / `UserChoice` / `Forced`, default `Forced`) — proof of an existing factor is required before adding/replacing TOTP, recovery codes, app password, or passkey.
-- **Email step-up codes** — users with email but no TOTP/passkey can request an 8-digit code by mail to clear the step-up gate.
-- **OIDC private / VPN / LAN endpoints** — per-provider toggle to allow private-IP IdPs without weakening the v2.5.5 SSRF guard for the public-Internet ones.
-- **Hide built-in 2FA / Passkey login buttons** — independent admin toggles for OIDC-only deployments.
-- **`BlockEmptyPasswordLogin`** — when true, refuses empty/whitespace passwords for all users.
-- **`BareDeviceIdBypassEnabled` flag** — gates the registered/paired-device-without-cookie fallback (default off; signed trusted-device cookies unaffected).
-- **Verified-session persistence** — SHA-256 hashes of verified tokens survive process restart so active sessions don't get re-blocked.
-
-### New in v2.5
-- **Step-up authentication** — configurable level (`Off` / `Destructive` / `AllConfigChanges` / `Everything`) re-prompts for 2FA on sensitive admin actions.
-- **Encrypted configuration exports** — passphrase-protected (AES-256-GCM, PBKDF2-SHA256 600k iter) versioned export envelopes for back-up / migration.
-- **12-factor security score** — coverage, admins, enforcement, audit chain, IP ban, impossible-travel (functional check), HIBP, clean-7d audit, require-to-disable, step-up, webhook, recovery codes. Raw 130 pts normalized to a 100 ceiling.
-- **Admin Dashboard Overview** — auth-activity stacked-area chart with 1w / 1m / 1y range selector, hover tooltips, dashed gridlines, x-axis date markers, server-side bucket backfill.
-- **Internationalization (8 languages)** — en / de / es / fr / it / ja / pt / zh at full key parity. Native-name picker. Per-user preference + server-wide default + URL `?lang=` override. **(v2.5.12)** Every surface is now covered — the **login page**, the **2FA setup page**, the **admin UI**, and the injected **"Two-Factor Auth" sidebar entry** — and the language **follows Jellyfin's own display language automatically** (detected from the active UI culture / browser, remembered across restarts). Scripts are served on cache-immune paths so a CDN can't freeze the translations.
-- **Indefinite device trust (opt-in)** — admin-gated `AllowIndefiniteTrust` flag; users can mark individual trusted browsers / paired devices to never expire.
-- **Audit-chain rebuild** — admin action (step-up gated) to repair audit-log hash continuity after disk corruption.
-- **`RequireTwoFactorToDisable`** — re-prompts for 2FA before a user can disable their own 2FA.
-
-### New in v2.0
-- **OIDC / SSO sign-in** — Google, Microsoft/Entra, Apple, Authelia, Authentik, Keycloak, PocketID, Cloudflare Access, or any OIDC-compliant IdP. PKCE, id_token signature validation, group-based authorisation, optional AMR-based IdP-MFA enforcement.
-- **Brute-force IP banning** — auto-bans source IPs that exceed N failed sign-ins in M minutes. Persisted across restarts, with admin UI to list/unban.
-- **Impossible-travel detection** — notifies when consecutive sign-ins exceed commercial-jet cruise speed (≈900km/h default). Uses MaxMind GeoLite2-City for lat/lon.
-- **Per-user IP allowlist** — pin high-value accounts (e.g. admin) to specific CIDRs so sign-in is refused from everywhere else.
-- **Login-page provider buttons** — each configured SSO provider shows below the normal sign-in form.
-- **Linked sign-in methods in user Setup** — users see/unlink their external accounts self-service.
+### Jellyfin compatibility
+- **Runs on Jellyfin 10.11.x and 12.x from one plugin** — a .NET 9 build (`targetAbi 10.11.0.0`) and a .NET 10 build (`targetAbi 12.0.0.0`) are published under the same catalog entry, and Jellyfin installs the one matching your server automatically. Existing installs auto-update, and upgrading a server from 10.11 to 12 switches builds on the next update.
+- **Multi-architecture native support** — `linux-x64`, `linux-arm64`, and `linux-musl-x64` native libraries are bundled, so recovery-code PDFs and native crypto work on x86, Raspberry Pi, Apple-Silicon Linux, and Alpine.
+- **Modern authorization headers** — the plugin's pages and endpoints accept Jellyfin's current `Authorization: MediaBrowser Token`, required once 12 disables legacy authorization.
 
 ### Authentication
-- **TOTP** (RFC 6238) compatible with Google Authenticator, Authy, 1Password, Microsoft Authenticator, Bitwarden, etc.
-- **Passkeys / WebAuthn** for Face ID, Touch ID, Windows Hello, security keys, and password managers. New credentials request the portable ES256 algorithm.
-- **10 single-use recovery codes** generated at enrollment, stored as per-code-salted PBKDF2-HMAC-SHA256 hashes (600k iterations), displayable once
-- **Email OTP fallback** via configurable SMTP — codes expire in 5 minutes, single-use
-- **Per-device trust** via signed HTTP-only cookie (HMAC-SHA256, 30-day expiry, `SameSite=Strict`)
+- **TOTP** (RFC 6238), compatible with Google Authenticator, Authy, 1Password, Microsoft Authenticator, Bitwarden, and others.
+- **Passkeys / WebAuthn** for Face ID, Touch ID, Windows Hello, security keys, and password managers; credentials request the portable ES256 algorithm so they work across Linux, ARM, Windows, and iOS.
+- **10 single-use recovery codes** generated at enrollment, stored as per-code-salted PBKDF2-HMAC-SHA256 hashes (600k iterations), shown once.
+- **Email OTP fallback** via configurable SMTP — 8-digit codes expire in 5 minutes and are single-use.
+- **Per-device trust** via a signed HTTP-only cookie (HMAC-SHA256, 30-day expiry, `SameSite=Strict`).
 - **Account-aware challenges** show the username being verified before a TOTP, recovery, email, or passkey response is submitted.
 
+### SSO / OIDC sign-in
+- **Any OIDC identity provider** — Google, Microsoft/Entra, Apple, Authelia, Authentik, Keycloak, PocketID, Cloudflare Access, or any OIDC-compliant IdP, with PKCE and full id_token signature validation.
+- **Group / role authorization** — allowed-users, admin elevation, and role→library mapping, including Keycloak nested `realm_access` / `resource_access` roles.
+- **Onboarding controls** — opt-in exact-username linking, verified-email matching, forced local-password setup, and template-user permission inheritance for auto-created users.
+- **RP-initiated logout** — ends the IdP session on sign-out (opt-in per provider) so "Sign in with…" prompts again.
+- **Per-provider tuning** — custom button text/icon, IdP email auto-fill from a configurable claim, private/LAN IdP allow, and an "omit `prompt=login`" toggle for IdPs that reject forced re-auth.
+
 ### Enforcement
-- Session-level enforcement via `ISessionManager.SessionStarted` — works for all clients, not just web
-- API-level request blocking — even valid Jellyfin tokens get 401 until 2FA is completed
-- Per-IP rate limiting on verify (10/min) and email send (5/5min)
-- Per-challenge attempt limit (5 attempts before challenge is burned)
-- Per-user lockout after 5 failed attempts (15-minute cool-down, configurable)
-- LAN bypass (configurable CIDR ranges) so local devices can skip 2FA
-- Force-2FA-for-all-users mode (admin setting)
+- Session-level enforcement via `ISessionManager.SessionStarted` — works for all clients, not just web.
+- API-level request blocking — even valid Jellyfin tokens get 401 until 2FA is completed.
+- Per-IP rate limiting on verify (10/min) and email send (5/5min); per-challenge attempt limit (5 before the challenge is burned).
+- Per-user lockout after 5 failed attempts (15-minute cool-down, configurable).
+- LAN bypass (configurable CIDR ranges), and a force-2FA-for-all-users mode.
+- **Disable password sign-in** — OIDC / Quick-Connect-only mode with independently toggleable admin / LAN / exempt-CIDR escape hatches.
+
+### Brute-force & anomaly protection
+- **Brute-force IP banning** — auto-bans source IPs that exceed N failed sign-ins in M minutes, persisted across restarts, with an admin list/unban UI.
+- **Impossible-travel detection** — flags consecutive sign-ins that exceed commercial-jet cruise speed, using MaxMind GeoLite2-City for geolocation.
+- **Per-user IP allowlist** — pin high-value accounts (e.g. admin) to specific CIDRs so sign-in is refused from everywhere else.
+
+### Step-up authentication
+- Configurable level (`Off` / `Destructive` / `AllConfigChanges` / `Everything`) re-prompts for 2FA on sensitive admin actions, covering the OIDC provider form and every gated admin call.
+- **Hardened self-service** — proof of an existing factor is required before adding or replacing TOTP, recovery codes, an app password, or a passkey.
+- The step-up proof accepts a typed TOTP, an emailed 8-digit code, or a passkey, so no admin is locked out by their choice of factor.
 
 ### Security
-- TOTP secrets encrypted at rest with **AES-GCM** using a persistent 32-byte key (survives restarts)
-- Cookie signatures use **HMAC-SHA256** with persistent key
-- Constant-time comparison for all secret material (`CryptographicOperations.FixedTimeEquals`)
-- TOTP replay prevention (used time-steps tracked per user)
-- Recovery codes marked used immediately on validation (not on full login success) — stolen codes can't be retried
-- Atomic file writes for user data — crash mid-write doesn't corrupt 2FA state
-- Generic error messages prevent account enumeration ("invalid credentials" whether password or code is wrong)
+- TOTP secrets encrypted at rest with **AES-GCM** using a persistent 32-byte key (survives restarts); cookie signatures use **HMAC-SHA256**.
+- Constant-time comparison for all secret material (`CryptographicOperations.FixedTimeEquals`).
+- TOTP replay prevention (used time-steps tracked per user); recovery codes marked used immediately on validation, so a stolen code can't be retried.
+- Atomic file writes for user data — a crash mid-write can't corrupt 2FA state.
+- Generic error messages prevent account enumeration ("invalid credentials" whether the password or the code is wrong).
 
-### Native client support (v1.3.0)
-- **App passwords** — generate revocable long random passwords for native apps (Swiftfin, Findroid, etc.). Stored as PBKDF2-SHA256 hashes. Users with a Jellyfin password can enter the app password in the native client's password field to bypass 2FA.
-- **Device pairing** — passwordless users (no Jellyfin password) can pair native clients: the first failed login registers a "pending pairing request." The user approves it from `/TwoFactorAuth/Setup`, and the device is permanently trusted.
-- **Quick Connect pass-through** — when a 2FA-verified user approves a Quick Connect code, the new device inherits the verified status. TVs sign in without a TOTP prompt.
-- **Active sessions view** — users can see all their active sessions with device/IP/last-activity and sign them out individually.
-- **Official Android hand-off** — the injected mobile flow preserves Base URLs, returns to the app after verification, and recognises the trusted session on follow-up requests. Clients without a browser-capable flow can still use pairing or app passwords.
+### Native client support
+- **App passwords** — revocable long random passwords for native apps (Swiftfin, Findroid, Symfonium, Seerr, etc.), stored as PBKDF2-SHA256 hashes; entered in the client's password field to bypass 2FA for that client only.
+- **Device pairing** — passwordless users can pair native clients by approving a pending request from the Setup page.
+- **Quick Connect pass-through** — a 2FA-verified user approving a Quick Connect code lets the new device inherit verified status, so TVs sign in without a TOTP prompt.
+- **Active sessions view** — see every active session with device/IP/last-activity and sign them out individually.
+- **Official Android / mobile hand-off** — preserves Base URLs, returns to the app after verification, and recognises the trusted session on follow-up requests.
 
-### UI
-- Polished login page with lockout countdown and low-recovery-code warning
-- Redesigned Setup page with status dashboard, TOTP enrollment, recovery codes, email backup, pending device approvals, paired devices, app passwords, trusted browsers, and active sessions — all in one unified view
-- Admin dashboard with users, devices, audit log (paginated, filterable, newest/oldest sorting), and settings with Test SMTP button
-- Configurable TOTP issuer name (what users see in their authenticator app)
-- Per-user email address management (self-service from Setup page or admin-set)
-- "Sign in with 2FA" button auto-injected into Jellyfin's standard login page
-- "Two-Factor Auth" entry injected into Jellyfin's navigation: the desktop and mobile sidebar, and on Jellyfin 12's default layout the avatar menu (below Profile) and the user preferences list; its label is updated live when the Jellyfin language changes
-- Settings page tile so users can find Setup from their preferences
-- Security-posture diagnostics are isolated so one unavailable check cannot leave the whole dashboard stuck on **Computing...** or disable tab navigation.
+### Admin, scoring & diagnostics
+- **12-factor security score** with an auth-activity overview chart (1w / 1m / 1y range, hover tooltips, server-side bucket backfill).
+- **Audit log** of every 2FA-related event — paginated, filterable, sortable, hash-chained, and rebuildable after disk corruption (1000 entries default, 90-day prune).
+- **Encrypted configuration exports** — passphrase-protected (AES-256-GCM, PBKDF2-SHA256 600k) envelopes for back-up and migration.
+- **Self-diagnostics** — keys, auth-provider wiring, inject middleware, audit-chain integrity, and a GeoIP check that retries, falls back to an in-memory open, and reports per-database *why* a database failed to load instead of a blank "Fail".
+
+### UI & internationalization
+- Polished login page with lockout countdown and low-recovery-code warning; a unified Setup page (TOTP, recovery codes, email backup, pending device approvals, paired devices, app passwords, trusted browsers, active sessions).
+- Admin dashboard with users, devices, sortable audit log, and settings with a Test SMTP button; injected "Sign in with 2FA" button and a "Two-Factor Auth" navigation entry (desktop/mobile sidebar, and on Jellyfin 12's layout the avatar menu below Profile and the preferences list).
+- **8 languages** (English, German, Spanish, French, Italian, Japanese, Portuguese, Chinese) at full key parity, following Jellyfin's own display language automatically and served on cache-immune paths.
 
 ### Notifications
-- Push notifications for login attempts via **ntfy**, **Gotify**, generic **webhooks** (HMAC-signed), or **email**
-- **Self-hosted targets on a private LAN IP are supported** — opt-in "Allow notifications to private/LAN addresses" toggle (default off; link-local / cloud-metadata always blocked) *(v2.5.17)*
-- Repeated native-client session events are deduplicated by logical user/device identity, so changing forwarded addresses do not produce Gotify or ntfy notification storms *(v2.5.20)*
-- Audit log of every 2FA-related event (1000 entries default, FIFO, 90-day prune)
+- Push notifications for login events via **ntfy**, **Gotify**, generic **webhooks** (HMAC-signed, with custom headers), or **email**, with authentication for each channel.
+- **Self-hosted LAN targets supported** via an opt-in "Allow notifications to private/LAN addresses" toggle (default off; link-local / cloud-metadata always blocked).
+- Repeated native-client session events are deduplicated by logical user/device identity, so changing forwarded addresses don't produce notification storms.
 
 ---
 
@@ -1205,6 +1053,15 @@ POST   /TwoFactorAuth/Sessions/{id}/Revoke               — revoke an active se
 - Fixed in-app OIDC sign-in freezing on a blank screen on Jellyfin 12 (the stored credential now carries a resolvable address in the connection mode 12 expects) and gave 12 users a working path back to the setup page after 12's route changes (#191, #193).
 - Closed the QuestPDF bump (#190): it stays pinned at 2026.5.0 because later versions render an invalid recovery-codes PDF.
 - 500 passing tests. Both ABIs built, signed, SLSA-attested, and validated on live Jellyfin 10.11 and 12 servers.
+
+### 2.5.22
+
+- Fixed a security-control bypass: "Disable password sign-in" did not fully hold. The deprecated `POST /Users/{userId}/Authenticate` endpoint was not gated (and also skipped empty-password blocking and per-account lockout), and the SSO waiver was a string-prefix test rather than a live token lookup. Both are fixed; valid credentials were always still required (reported privately by @camarigor).
+- Added OIDC RP-initiated logout: signing out of Jellyfin can end the identity-provider session too, opt-in per provider and off by default (#170, #134).
+- The security score now credits a server that has turned password sign-in off, additive and graded by how many escape hatches remain open (#160).
+- A user at their maximum simultaneous-session limit now gets the real reason instead of a 500, and the refusal no longer feeds the per-IP ban counter (#178).
+- The plugin's pages and endpoints accept Jellyfin's current `Authorization: MediaBrowser Token` header alongside the legacy `X-Emby-Token`, required once legacy authorization is disabled on Jellyfin 12 (#174, #180).
+- Hardening: the trust-cookie middleware's matching endpoint blind spot is closed (it had failed closed, so was never exploitable), and private vulnerability reporting is enabled.
 
 ### 2.5.21
 
