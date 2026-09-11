@@ -66,9 +66,17 @@ visible trust signals is treated as a high-priority bug.
 
 ---
 
-## 🆕 What's new in v2.5.22
+## 🆕 What's new in v2.6.0
 
-This release closes a security-control bypass: **"Disable password sign-in" did not actually hold.** If you rely on that switch, update. It also adds sign-out at your identity provider, credits a passwordless setup in the security score, and clears a confusing 500 on the login page. In-place upgrade from any 2.5.x, no schema migration or config reset.
+**Jellyfin 12 support, without dropping 10.11.** The plugin now ships two builds from one source, .NET 9 for Jellyfin 10.11.x and .NET 10 for Jellyfin 12.x, both in the one catalog entry, so your server installs the build that matches its version automatically. This release also fixes the admin step-up prompt on the settings and OIDC-provider paths, gives the GeoIP diagnostics a real reason instead of a blank "Fail", and folds in five contributor PRs. In-place upgrade from any 2.5.x, no schema migration or config reset.
+
+**v2.6.0**
+
+- **🧩 Jellyfin 12 supported, 10.11 unchanged** *(#196, #172)* — Jellyfin 12 moved to .NET 10, and a 10.11-built plugin cannot load there, which is why every action returned 401 on 12. The plugin now builds twice from one source: a **.NET 9** package for 10.11.x and a **.NET 10** package for 12.x, both published under the same catalog entry. Jellyfin routes each host to its build, so there is nothing to choose and existing installs update themselves. Verified end to end on real 10.11 and 12 servers.
+- **🔐 The admin step-up prompt appears everywhere it should** *(#198/#199, #194/#195; camarigor)* — creating, editing and deleting an OIDC provider, the user-2FA toggle, "require password setup" and the audit log are all step-up-gated, but some called the server with a plain fetch, so a required step-up surfaced as a bare "Save failed" and Delete did nothing. They now route through the step-up-aware fetch. The modal also accepts an **emailed code or a passkey**, not just a typed TOTP, so admins whose factor is email or a passkey are no longer locked out.
+- **🌍 GeoIP diagnostics that explain themselves** *(#200, camarigor; refs #51)* — a database that would not load used to read as a blank "Fail". The loader now keeps the reason, retries, and falls back to an in-memory open, and the Diagnostics tab prints what it saw for each database (`not found at … (directory not visible to the Jellyfin process)`, `rejected (not absolute)`, and so on).
+- **📲 In-app OIDC and the setup page on 12** *(#191, #193; camarigor)* — in-app "Sign in with …" no longer freezes on a blank screen on 12 (the stored credential now carries a resolvable address in the connection mode 12 expects), and 12's changed web routes get a working way back to the setup page from the avatar menu.
+- **500 passing tests.** Sigstore-signed and SLSA build-provenance attested.
 
 **v2.5.22**
 
@@ -182,6 +190,14 @@ The standard Jellyfin login page gets a small "Sign in with 2FA" button injected
 ---
 
 ## 🧩 Features
+
+### New in v2.6.0
+- **Dual-ABI packaging: one source, two builds** - a .NET 9 build (`targetAbi 10.11.0.0`) for Jellyfin 10.11.x and a .NET 10 build (`targetAbi 12.0.0.0`) for Jellyfin 12.x, both published in the one `manifest.json` under the same GUID. Jellyfin's catalog installs the build matching the host's version, so 10.11 and 12 users share one catalog entry and one auto-update line (#196, #172).
+- **Admin step-up prompt on every gated action** - the OIDC provider create/edit/delete form and the shared admin helpers (user-2FA toggle, require-password-setup, audit log) route through the step-up-aware fetch, so a required re-auth shows the prompt instead of a bare "Save failed" (#198, #199).
+- **Step-up modal takes an emailed code or a passkey** - not just a typed TOTP, so an admin whose second factor is email OTP or a passkey can clear the gate (#194, #195).
+- **GeoIP diagnostics report the reason** - a database that fails to load is retried, falls back to an in-memory open, and reports per-database why it failed (not found / directory not visible / rejected path) instead of a blank "Fail" (#200, refs #51).
+- **In-app OIDC and setup-page fixes for Jellyfin 12** - the in-app sign-in stores a resolvable server address in the connection mode 12 expects, and 12's changed routes get a working path back to the setup page (#191, #193).
+- **500 passing tests**, both ABIs built and validated on live 10.11 and 12 servers.
 
 ### New in v2.5.22
 
@@ -383,7 +399,9 @@ https://raw.githubusercontent.com/ZL154/JellyfinSecurity/main/manifest.json
 
 ### Jellyfin 12
 
-The current build runs on Jellyfin 12.0.0 as is: the official 12.0.0 image ships the .NET 10 runtime and loads the plugin's net9.0 assembly, and the manifest entry above installs on 12 because its `targetAbi` (10.11.0.0) is below the server version. Upgrading a 10.11 server in place keeps the plugin installed and active; there is no need to remove and reinstall it.
+Jellyfin 12 moved to .NET 10, and a plugin compiled against 10.11 (.NET 9) will not load there. As of **v2.6.0** the plugin ships two builds from one source and both are published in the same catalog entry: a **.NET 9** package (`targetAbi 10.11.0.0`) for Jellyfin 10.11.x and a **.NET 10** package (`targetAbi 12.0.0.0`) for Jellyfin 12.x. Jellyfin's catalog installs the build that matches your server's version, so there is nothing to choose. Installing from the catalog, or letting an existing install auto-update, does the right thing on both, and upgrading a 10.11 server to 12 later switches it to the .NET 10 build automatically.
+
+If you install manually from the Releases page, pick the matching zip: **`...v2.6.0.0-jf12.zip`** on Jellyfin 12, and the plain **`...v2.6.0.0.zip`** on Jellyfin 10.11.
 
 One thing looks different on 12: its default web layout has no side drawer, so the **Two-Factor Auth** entry lives in the avatar menu (below **Profile**) and in the user preferences list instead. Jellyfin 12 also disables the legacy authorization headers by default; the plugin's pages and endpoints already send `Authorization: MediaBrowser Token` (#174, #180), so nothing needs changing on that side.
 
@@ -1177,6 +1195,16 @@ POST   /TwoFactorAuth/Sessions/{id}/Revoke               — revoke an active se
 ---
 
 ## 📝 Changelog
+
+### 2.6.0
+
+- Added Jellyfin 12 support without dropping 10.11: the plugin now builds twice from one source, a .NET 9 package (`targetAbi 10.11.0.0`) for Jellyfin 10.11.x and a .NET 10 package (`targetAbi 12.0.0.0`) for Jellyfin 12.x, both published in the one `manifest.json` under the same GUID so Jellyfin's catalog routes each host to its build (#196, #172).
+- Routed the OIDC provider form and the shared admin helpers (user-2FA toggle, require-password-setup, audit log) through the step-up-aware fetch, so a step-up-gated action shows the prompt instead of a bare "Save failed", and Delete works (#198, #199).
+- Made the admin step-up modal accept an emailed code or a passkey in addition to a typed TOTP, so admins whose second factor is email OTP or a passkey are not locked out (#194, #195).
+- Reworked the GeoIP loader to keep the failure reason, retry, and fall back to an in-memory open, and made the Diagnostics tab report per-database why a database did not load instead of a blank "Fail" (#200, refs #51).
+- Fixed in-app OIDC sign-in freezing on a blank screen on Jellyfin 12 (the stored credential now carries a resolvable address in the connection mode 12 expects) and gave 12 users a working path back to the setup page after 12's route changes (#191, #193).
+- Closed the QuestPDF bump (#190): it stays pinned at 2026.5.0 because later versions render an invalid recovery-codes PDF.
+- 500 passing tests. Both ABIs built, signed, SLSA-attested, and validated on live Jellyfin 10.11 and 12 servers.
 
 ### 2.5.21
 
