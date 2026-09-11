@@ -88,6 +88,25 @@ public class OidcVerificationFailureTests
         Assert.Contains("Signing Key", msg, System.StringComparison.Ordinal);
     }
 
+    [Theory]
+    // Discussion #188 (prefixaut): an authentik provider with an "Encryption
+    // Key" set returns an ENCRYPTED (JWE) id_token, whose header alg is a
+    // key-management algorithm (RSA-OAEP-256), not a signature. The old message
+    // pointed at the signing key, which can't fix it.
+    [InlineData("Token verification failed: Algorithm 'RSA-OAEP-256' is a token-encryption algorithm, not a signature algorithm — your identity provider is encrypting the ID token (JWE). This plugin verifies a signed ID token and does not decrypt one.")]
+    [InlineData("Token verification failed: Algorithm 'ECDH-ES' is a token-encryption algorithm, not a signature algorithm — your identity provider is encrypting the ID token (JWE).")]
+    public void Encrypted_id_token_points_at_the_provider_encryption_key(string error)
+    {
+        var msg = OidcService.DescribeVerificationFailure(error);
+
+        Assert.NotNull(msg);
+        Assert.Contains("encrypt", msg, System.StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Encryption Key", msg, System.StringComparison.Ordinal);
+        // Must NOT send them chasing the signing-key fix (the wrong lever here).
+        Assert.DoesNotContain("RS256", msg, System.StringComparison.Ordinal);
+        AssertNoInternals(msg, error);
+    }
+
     [Fact]
     public void Nonce_mismatch_tells_the_user_to_restart_the_sign_in()
     {

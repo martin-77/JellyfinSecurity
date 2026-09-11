@@ -1871,6 +1871,17 @@ public class OidcService : IDisposable
                 + "both have accurate time (NTP).";
         }
 
+        // Discussion #188: the IdP is encrypting the ID token (JWE) rather than
+        // only signing it. Different fix from the signing-key case below, so
+        // catch it first and point at the provider's encryption setting.
+        if (error.Contains("token-encryption algorithm", StringComparison.Ordinal))
+        {
+            return "Your identity provider is encrypting the sign-in token (JWE) instead of only signing it, "
+                + "and this plugin verifies a signed token rather than decrypting one. Turn off ID-token "
+                + "encryption at the provider — in authentik, clear the provider's \"Encryption Key\" and keep "
+                + "only the \"Signing Key\" — then sign in again.";
+        }
+
         // Algorithm not in our asymmetric allowlist. Most often an IdP provider
         // configured with no signing key at all, which makes it fall back to
         // HMAC (HS256) using the client secret.
@@ -1890,6 +1901,19 @@ public class OidcService : IDisposable
         }
 
         return null;
+    }
+
+    // Discussion #188: recognise JWE key-management ("alg") algorithms so a
+    // rejected encrypted ID token produces an actionable error instead of the
+    // generic signature-algorithm hint. Covers the RFC 7518 §4 set an IdP
+    // would realistically use to encrypt an ID token.
+    private static bool IsEncryptionAlgorithm(string alg)
+    {
+        if (string.IsNullOrEmpty(alg)) return false;
+        return alg.StartsWith("RSA", StringComparison.Ordinal)          // RSA1_5, RSA-OAEP, RSA-OAEP-256
+            || alg.StartsWith("ECDH-ES", StringComparison.Ordinal)      // ECDH-ES(+A*KW)
+            || alg.EndsWith("KW", StringComparison.Ordinal)             // A128KW/A192KW/A256KW, A*GCMKW
+            || alg.Equals("dir", StringComparison.Ordinal);             // direct shared key
     }
 
     private async Task<ClaimsBundle> VerifyIdTokenAsync(OidcProvider provider, Discovery disc, string idToken, string? expectedNonce)
@@ -1943,6 +1967,26 @@ public class OidcService : IDisposable
                 {
                     _logger.LogWarning("[2FA] OIDC token rejected: disallowed alg '{Alg}' from provider {Provider}",
                         declaredAlg, provider.Id);
+                    // Discussion #188: an encrypted (JWE) ID token carries a
+                    // key-management algorithm in its header — RSA-OAEP*, A*KW,
+                    // dir, ECDH-ES* — not a signature algorithm. The plugin
+                    // verifies signatures against the IdP's JWKS and does not
+                    // decrypt, so name the real problem instead of the generic
+                    // "only RS*/ES*/PS*" hint, which sends people hunting for a
+                    // signing-key fix that can't help. The fix is at the IdP:
+                    // stop encrypting the ID token (e.g. clear Authentik's
+                    // provider "Encryption Key").
+                    if (IsEncryptionAlgorithm(declaredAlg))
+                    {
+                        throw new SecurityTokenInvalidAlgorithmException(
+                            $"Algorithm '{declaredAlg}' is a token-encryption algorithm, not a signature "
+                            + "algorithm — your identity provider is encrypting the ID token (JWE). This "
+                            + "plugin verifies a signed ID token and does not decrypt one. Turn off ID-token "
+                            + "encryption at the provider (in Authentik, clear the provider's \"Encryption "
+                            + "Key\" and keep only the \"Signing Key\"), so it returns a signed token. Only "
+                            + "RS*, ES*, PS* signatures are accepted.");
+                    }
+
                     throw new SecurityTokenInvalidAlgorithmException(
                         $"Algorithm '{declaredAlg}' is not permitted. Only RS*, ES*, PS* are accepted.");
                 }
