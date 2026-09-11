@@ -27,6 +27,20 @@ if [ "$PROJECT_VERSION" != "$META_VERSION" ]; then
     echo "Version mismatch: project=$PROJECT_VERSION meta.json=$META_VERSION" >&2
     exit 1
 fi
+
+# Multi-ABI versioning: the source carries one canonical X.Y.Z.0 version (net9 /
+# 10.11 line). The Jellyfin 12 (net10) build stamps the 4th octet to .1 so the
+# two ABIs ship as DISTINCT versions in the shared manifest.json. Jellyfin's
+# catalog then routes deterministically by "keep entries whose targetAbi <= host
+# version, take the highest": a 12 host sees both and picks the higher .1/abi-12
+# build; a 10.11 host has the .1/abi-12 entry filtered out (12 > 10.11) and gets
+# the .0/abi-10.11 build. Distinct versions also sidestep the same-version tie
+# that Jellyfin breaks only by manifest input order. Validated live against
+# jellyfin/jellyfin:12.0 (a 12 host installed the .1/net10 entry unattended).
+OUTPUT_VERSION="$PROJECT_VERSION"
+if [ "$IS_JF12" = "1" ]; then
+    OUTPUT_VERSION="$(printf '%s' "$PROJECT_VERSION" | sed -E 's/\.[0-9]+$/.1/')"
+fi
 for property in name description guid version targetAbi owner overview category status autoUpdate imagePath assemblies; do
     if ! grep -q "\"$property\"[[:space:]]*:" "$PROJECT_DIR/meta.json"; then
         echo "meta.json must contain Jellyfin's exact case-sensitive '$property' property" >&2
@@ -64,7 +78,7 @@ mkdir -p "$OUTPUT_DIR"
 BASE_PUBLISH_DIR="$SCRIPT_DIR/dist/publish-base"
 rm -rf "$BASE_PUBLISH_DIR"
 echo "Building managed plugin (Release, no RID, Jellyfin $JELLYFIN_VERSION)..."
-"$DOTNET" publish "$PROJECT_DIR" -c Release -p:JellyfinVersion="$JELLYFIN_VERSION" --self-contained false -o "$BASE_PUBLISH_DIR" --nologo
+"$DOTNET" publish "$PROJECT_DIR" -c Release -p:JellyfinVersion="$JELLYFIN_VERSION" -p:Version="$OUTPUT_VERSION" --self-contained false -o "$BASE_PUBLISH_DIR" --nologo
 
 for file in \
     Jellyfin.Plugin.TwoFactorAuth.dll \
@@ -108,7 +122,7 @@ for RID in "${RIDS[@]}"; do
     PUBLISH_DIR="$SCRIPT_DIR/dist/publish-$RID"
     rm -rf "$PUBLISH_DIR"
     echo "Building plugin (Release, RID=$RID, Jellyfin $JELLYFIN_VERSION)..."
-    "$DOTNET" publish "$PROJECT_DIR" -c Release -p:JellyfinVersion="$JELLYFIN_VERSION" -r "$RID" --self-contained false -o "$PUBLISH_DIR" --nologo
+    "$DOTNET" publish "$PROJECT_DIR" -c Release -p:JellyfinVersion="$JELLYFIN_VERSION" -p:Version="$OUTPUT_VERSION" -r "$RID" --self-contained false -o "$PUBLISH_DIR" --nologo
 
     NATIVE_DIR="$PUBLISH_DIR/runtimes/$RID/native"
     TARGET_NATIVE_DIR="$OUTPUT_DIR/runtimes/$RID/native"
@@ -125,13 +139,18 @@ for RID in "${RIDS[@]}"; do
     cp "$PUBLISH_DIR"/*.so "$OUTPUT_DIR/" 2>/dev/null || true
 done
 
-# Copy meta.json (patch it for the Jellyfin 12 build: raise targetAbi and drop
-# the BCL-provided assembly that net10 does not bundle).
+# Copy meta.json (patch it for the Jellyfin 12 build: bump the version to the
+# .1 net10 line, raise targetAbi, and drop the BCL-provided assembly that net10
+# does not bundle). The version bump keeps the packaged meta in lockstep with
+# the -p:Version stamp on the published assemblies, so Jellyfin records the
+# installed version as X.Y.Z.1 and never re-offers the .0 net9 entry as an
+# "update" to a 12 host.
 cp "$PROJECT_DIR/meta.json" "$OUTPUT_DIR/"
 if [ "$IS_JF12" = "1" ]; then
+    sed -i "s/\"version\": \"$PROJECT_VERSION\"/\"version\": \"$OUTPUT_VERSION\"/" "$OUTPUT_DIR/meta.json"
     sed -i 's/"targetAbi": "10.11.0.0"/"targetAbi": "12.0.0.0"/' "$OUTPUT_DIR/meta.json"
     sed -i '/"System.Formats.Cbor.dll",/d' "$OUTPUT_DIR/meta.json"
-    echo "Patched meta.json for Jellyfin 12 (targetAbi 12.0.0.0, no System.Formats.Cbor.dll)."
+    echo "Patched meta.json for Jellyfin 12 (version $OUTPUT_VERSION, targetAbi 12.0.0.0, no System.Formats.Cbor.dll)."
 fi
 # imageUrl only helps catalog installs. Jellyfin serves installed plugin
 # artwork from Manifest.ImagePath, so include it for manual packages too (#131).
